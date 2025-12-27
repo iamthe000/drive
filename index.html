@@ -220,20 +220,6 @@
             dashboard.castShadow = true; // 車内にも影を落とす
             carGroup.add(dashboard);
 
-            // 2. フロントガラス (PhysicalMaterialでリアルなガラス表現)
-            const glassMat = new THREE.MeshPhysicalMaterial({
-                color: 0xffffff, metalness: 0, roughness: 0.05,
-                transmission: 0.98, // 高い透過率
-                thickness: 1.5, // 厚み感
-                ior: 1.5, // 屈折率
-                envMapIntensity: 1.2, transparent: true, opacity: 0.3,
-                side: THREE.DoubleSide
-            });
-            const windshield = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.3), glassMat);
-            windshield.position.set(0, CONFIG.camHeight + 0.35, -0.6);
-            windshield.rotation.x = -0.25;
-            carGroup.add(windshield);
-
             // 3. Aピラー (窓枠)
             const pillarGeo = new THREE.CylinderGeometry(0.05, 0.07, 1.6, 16);
             const leftPillar = new THREE.Mesh(pillarGeo, interiorMat);
@@ -272,9 +258,19 @@
         }
 
         // --- 都市生成ロジック ---
-        function pseudoRandom(x, z) {
-            return ((Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1 + 1) % 1;
+        function pseudoRandom(x, z, salt = 0) {
+            return ((Math.sin(x * 12.9898 + z * 78.233 + salt * 5.4321) * 43758.5453) % 1 + 1) % 1;
         }
+
+function hashConnect(x1, z1, x2, z2) {
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+    const minZ = Math.min(z1, z2);
+    const maxZ = Math.max(z1, z2);
+    // Use different salts for horizontal and vertical to add variety
+    const salt = (x1 === x2) ? 1.1 : 2.2;
+    return pseudoRandom(minX, minZ, maxX + maxZ + salt) > 0.45;
+}
 
         function createOfficeBuilding(absX, absZ, relX, relZ) {
             const height = 60 + pseudoRandom(absX, absZ) * 120;
@@ -377,6 +373,27 @@
             return mesh;
         }
 
+        function createCrossroad(group, material) {
+            const roadX = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
+            roadX.rotation.x = -Math.PI / 2;
+            roadX.position.y = 0.01;
+            roadX.receiveShadow = true;
+            group.add(roadX);
+
+            const roadZ = roadX.clone();
+            roadZ.rotation.z = Math.PI / 2;
+            roadZ.position.y = 0.015;
+            group.add(roadZ);
+        }
+
+        function createDeadEndRoad(group, material) {
+            const road = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize / 2, CONFIG.roadWidth), material);
+            road.rotation.x = -Math.PI / 2;
+            road.position.set(-CONFIG.blockSize / 4, 0.01, 0);
+            road.receiveShadow = true;
+            group.add(road);
+        }
+
         function createStraightRoad(group, material) {
             const road = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
             road.rotation.x = -Math.PI / 2;
@@ -430,41 +447,63 @@
             const baseZ = cz * CONFIG.blockSize;
             chunkGroup.position.set(baseX, 0, baseZ);
 
-            // 地面
             const ground = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.blockSize), materialPool.grass);
             ground.rotation.x = -Math.PI / 2;
             ground.position.y = -0.05;
             ground.receiveShadow = true;
             chunkGroup.add(ground);
 
-            // 道路 (種類と回転をランダム化)
-            const roadTypeRand = pseudoRandom(cx, cz);
-            const rotationRand = pseudoRandom(cx + 1, cz + 1);
+            // --- 道路生成ロジック (決定的バージョン) ---
+            const connections = {
+                north: hashConnect(cx, cz, cx, cz + 1),
+                east: hashConnect(cx, cz, cx + 1, cz),
+                south: hashConnect(cx, cz, cx, cz - 1),
+                west: hashConnect(cx, cz, cx - 1, cz)
+            };
             
-            if (roadTypeRand < 0.25) { // 十字路
-                const roadX = new THREE.Mesh(geometryPool.road, materialPool.road);
-                roadX.rotation.x = -Math.PI / 2;
-                roadX.position.y = 0.01;
-                roadX.receiveShadow = true;
-                chunkGroup.add(roadX);
-
-                const roadZ = roadX.clone();
-                roadZ.rotation.z = Math.PI / 2;
-                roadZ.position.y = 0.015;
-                chunkGroup.add(roadZ);
-            } else if (roadTypeRand < 0.5) { // 直線
-                createStraightRoad(chunkGroup, materialPool.road);
-                if (rotationRand < 0.5) {
-                    chunkGroup.rotation.y = Math.PI / 2;
-                }
-            } else if (roadTypeRand < 0.75) { // T字路
-                createTJunction(chunkGroup, materialPool.road);
-                chunkGroup.rotation.y = Math.floor(rotationRand * 4) * (Math.PI / 2);
-            } else { // カーブ
-                createCurve(chunkGroup, materialPool.road);
-                chunkGroup.rotation.y = Math.floor(rotationRand * 4) * (Math.PI / 2);
+            // スタート地点(0,0)とその隣接チャンクは必ず道路を接続し、スタート地点を十字路にする
+            if (cx === 0 && cz === 0) {
+                connections.north = connections.east = connections.south = connections.west = true;
+            } else if (cx === 0 && cz === 1) {
+                connections.south = true;
+            } else if (cx === 1 && cz === 0) {
+                connections.west = true;
+            } else if (cx === 0 && cz === -1) {
+                connections.north = true;
+            } else if (cx === -1 && cz === 0) {
+                connections.east = true;
             }
 
+            const connectionCount = Object.values(connections).filter(Boolean).length;
+            const roadMaterial = materialPool.road;
+
+            if (connectionCount === 4) {
+                createCrossroad(chunkGroup, roadMaterial);
+            } else if (connectionCount === 3) {
+                createTJunction(chunkGroup, roadMaterial);
+                if (!connections.north) chunkGroup.rotation.y = Math.PI;
+                else if (!connections.east) chunkGroup.rotation.y = -Math.PI / 2;
+                else if (!connections.west) chunkGroup.rotation.y = Math.PI / 2;
+            } else if (connectionCount === 2) {
+                if (connections.north && connections.south) {
+                    createStraightRoad(chunkGroup, roadMaterial);
+                } else if (connections.east && connections.west) {
+                    createStraightRoad(chunkGroup, roadMaterial);
+                    chunkGroup.rotation.y = Math.PI / 2;
+                } else {
+                    createCurve(chunkGroup, roadMaterial);
+                    if (connections.north && connections.west) chunkGroup.rotation.y = Math.PI / 2;
+                    else if (connections.south && connections.west) chunkGroup.rotation.y = Math.PI;
+                    else if (connections.south && connections.east) chunkGroup.rotation.y = -Math.PI / 2;
+                }
+            } else if (connectionCount === 1) {
+                createDeadEndRoad(chunkGroup, roadMaterial);
+                 if (connections.north) chunkGroup.rotation.y = Math.PI / 2;
+                 else if (connections.east) chunkGroup.rotation.y = Math.PI;
+                 else if (connections.south) chunkGroup.rotation.y = -Math.PI / 2;
+            }
+            // connectionCountが0の場合は道路なし（広場）
+            
             // 電柱の配置
             for(let i = -CONFIG.blockSize / 2; i <= CONFIG.blockSize / 2; i += 25) {
                 if (Math.abs(i) > CONFIG.roadWidth / 2 - 5) {
