@@ -276,16 +276,93 @@
             return ((Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1 + 1) % 1;
         }
 
-        function createBuilding(x, z) {
-            const height = 20 + pseudoRandom(x, z) * 60;
-            const width = 15 + pseudoRandom(x+1, z) * 15;
-            const depth = 15 + pseudoRandom(x, z+1) * 15;
+        function createOfficeBuilding(absX, absZ, relX, relZ) {
+            const height = 60 + pseudoRandom(absX, absZ) * 120;
+            const width = 25 + pseudoRandom(absX + 1, absZ) * 20;
+            const depth = 25 + pseudoRandom(absX, absZ + 1) * 20;
+
+            const geo = new THREE.BoxGeometry(width, height, depth);
+            geo.translate(0, height / 2, 0);
+
+            const mat = pseudoRandom(absX + 5, absZ + 5) > 0.5 
+                ? materialPool.buildingReflective 
+                : new THREE.MeshStandardMaterial({ 
+                      color: 0x99aaff, 
+                      roughness: 0.2, 
+                      metalness: 0.7 
+                  });
+
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(relX, 0, relZ);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            return mesh;
+        }
+
+        function createUtilityPole(relX, relZ) {
+            const group = new THREE.Group();
+            const poleHeight = 12;
+            const poleMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.8 });
+            
+            // 本体
+            const poleGeo = new THREE.CylinderGeometry(0.2, 0.3, poleHeight, 8);
+            const pole = new THREE.Mesh(poleGeo, poleMat);
+            pole.position.y = poleHeight / 2;
+            pole.castShadow = true;
+            group.add(pole);
+
+            // 横木
+            const crossbarGeo = new THREE.BoxGeometry(0.3, 0.3, 3);
+            const crossbar1 = new THREE.Mesh(crossbarGeo, poleMat);
+            crossbar1.position.y = poleHeight - 2.5;
+            group.add(crossbar1);
+            
+            const crossbar2 = crossbar1.clone();
+            crossbar2.position.y = poleHeight - 4;
+            group.add(crossbar2);
+            
+            group.position.set(relX, 0, relZ);
+            return group;
+        }
+
+        function createApartment(absX, absZ, relX, relZ) {
+            const height = 30 + pseudoRandom(absX, absZ) * 40;
+            const width = 20 + pseudoRandom(absX + 1, absZ) * 10;
+            const depth = 20 + pseudoRandom(absX, absZ + 1) * 10;
+            
+            const group = new THREE.Group();
+            group.position.set(relX, 0, relZ);
+
+            // 本体
+            const mainMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.9 });
+            const mainBuilding = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), mainMat);
+            mainBuilding.position.y = height / 2;
+            mainBuilding.castShadow = true;
+            mainBuilding.receiveShadow = true;
+            group.add(mainBuilding);
+
+            // バルコニー
+            const balconyMat = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, roughness: 0.9 });
+            const balconyGeo = new THREE.BoxGeometry(width, 1, 2);
+            for (let y = 3; y < height - 3; y += 4) {
+                const balcony = new THREE.Mesh(balconyGeo, balconyMat);
+                balcony.position.set(0, y, depth / 2 + 1);
+                balcony.castShadow = true;
+                group.add(balcony);
+            }
+            return group;
+        }
+
+        function createBuilding(absX, absZ, relX, relZ) {
+            const height = 20 + pseudoRandom(absX, absZ) * 60;
+            const width = 15 + pseudoRandom(absX+1, absZ) * 15;
+            const depth = 15 + pseudoRandom(absX, absZ+1) * 15;
             
             const geo = new THREE.BoxGeometry(width, height, depth);
             geo.translate(0, height / 2, 0);
             
             // ランダムで光沢のあるビルと窓テクスチャのビルを切り替え
-            const mat = pseudoRandom(x+5, z+5) > 0.8 ? materialPool.buildingReflective : materialPool.building;
+            const mat = pseudoRandom(absX+5, absZ+5) > 0.8 ? materialPool.buildingReflective : materialPool.building;
             
             // テクスチャのリピート調整（高さに合わせて）
             if(mat.map) {
@@ -294,51 +371,144 @@
             }
 
             const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(x, 0, z);
+            mesh.position.set(relX, 0, relZ);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             return mesh;
+        }
+
+        function createStraightRoad(group, material) {
+            const road = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
+            road.rotation.x = -Math.PI / 2;
+            road.position.y = 0.01;
+            road.receiveShadow = true;
+            group.add(road);
+        }
+
+        function createTJunction(group, material) {
+            const road1 = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
+            road1.rotation.x = -Math.PI / 2;
+            road1.position.y = 0.01;
+            road1.receiveShadow = true;
+            group.add(road1);
+
+            const road2 = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.roadWidth, CONFIG.blockSize / 2), material);
+            road2.rotation.x = -Math.PI / 2;
+            road2.position.set(0, 0.015, -CONFIG.blockSize/4);
+            road2.receiveShadow = true;
+            group.add(road2);
+        }
+
+        function createCurve(group, material) {
+            const curveShape = new THREE.Shape();
+            const roadWidth = CONFIG.roadWidth;
+            curveShape.moveTo(-CONFIG.blockSize / 2, -roadWidth / 2);
+            curveShape.lineTo(-roadWidth / 2, -roadWidth / 2);
+            curveShape.quadraticCurveTo(
+                -roadWidth / 2, CONFIG.blockSize / 2,
+                CONFIG.blockSize / 2, CONFIG.blockSize / 2
+            );
+             curveShape.lineTo(CONFIG.blockSize / 2, roadWidth/2);
+             curveShape.quadraticCurveTo(
+                roadWidth/2, roadWidth/2,
+                roadWidth / 2, -CONFIG.blockSize / 2
+            );
+            curveShape.lineTo(-CONFIG.blockSize/2, -CONFIG.blockSize/2);
+
+
+            const geometry = new THREE.ShapeGeometry(curveShape);
+            const road = new THREE.Mesh(geometry, material);
+            road.rotation.x = -Math.PI / 2;
+            road.position.y = 0.01;
+            road.receiveShadow = true;
+            group.add(road);
         }
 
         function createChunk(cx, cz) {
             const chunkGroup = new THREE.Group();
             const baseX = cx * CONFIG.blockSize;
             const baseZ = cz * CONFIG.blockSize;
+            chunkGroup.position.set(baseX, 0, baseZ);
 
             // 地面
             const ground = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.blockSize), materialPool.grass);
             ground.rotation.x = -Math.PI / 2;
-            ground.position.set(baseX, -0.05, baseZ);
+            ground.position.y = -0.05;
             ground.receiveShadow = true;
             chunkGroup.add(ground);
 
-            // 道路 (十字)
-            const roadX = new THREE.Mesh(geometryPool.road, materialPool.road);
-            roadX.rotation.x = -Math.PI / 2;
-            roadX.position.set(baseX, 0.01, baseZ);
-            roadX.receiveShadow = true;
-            chunkGroup.add(roadX);
+            // 道路 (種類と回転をランダム化)
+            const roadTypeRand = pseudoRandom(cx, cz);
+            const rotationRand = pseudoRandom(cx + 1, cz + 1);
+            
+            if (roadTypeRand < 0.25) { // 十字路
+                const roadX = new THREE.Mesh(geometryPool.road, materialPool.road);
+                roadX.rotation.x = -Math.PI / 2;
+                roadX.position.y = 0.01;
+                roadX.receiveShadow = true;
+                chunkGroup.add(roadX);
 
-            const roadZ = roadX.clone();
-            roadZ.rotation.z = Math.PI / 2;
-            roadZ.position.y = 0.015; // 重なりチラツキ防止
-            chunkGroup.add(roadZ);
+                const roadZ = roadX.clone();
+                roadZ.rotation.z = Math.PI / 2;
+                roadZ.position.y = 0.015;
+                chunkGroup.add(roadZ);
+            } else if (roadTypeRand < 0.5) { // 直線
+                createStraightRoad(chunkGroup, materialPool.road);
+                if (rotationRand < 0.5) {
+                    chunkGroup.rotation.y = Math.PI / 2;
+                }
+            } else if (roadTypeRand < 0.75) { // T字路
+                createTJunction(chunkGroup, materialPool.road);
+                chunkGroup.rotation.y = Math.floor(rotationRand * 4) * (Math.PI / 2);
+            } else { // カーブ
+                createCurve(chunkGroup, materialPool.road);
+                chunkGroup.rotation.y = Math.floor(rotationRand * 4) * (Math.PI / 2);
+            }
 
-            // 白線 (簡易)
-            const lineGeo = new THREE.PlaneGeometry(1, 8);
-            for(let i=-2; i<=2; i++) {
-                 if(i===0) continue;
-                 const line = new THREE.Mesh(lineGeo, materialPool.line);
-                 line.rotation.x = -Math.PI/2;
-                 line.position.set(baseX + i*CONFIG.roadWidth/4, 0.02, baseZ + CONFIG.blockSize/4);
-                 chunkGroup.add(line);
+            // 電柱の配置
+            for(let i = -CONFIG.blockSize / 2; i <= CONFIG.blockSize / 2; i += 25) {
+                if (Math.abs(i) > CONFIG.roadWidth / 2 - 5) {
+                     chunkGroup.add(createUtilityPole(i, CONFIG.roadWidth / 2 + 2));
+                     chunkGroup.add(createUtilityPole(i, -CONFIG.roadWidth / 2 - 2));
+                }
             }
 
             // ビル配置
             const qSize = CONFIG.blockSize / 4;
             [[ -1, -1 ], [ 1, -1 ], [ -1, 1 ], [ 1, 1 ]].forEach(([qx, qz]) => {
-                if(pseudoRandom(baseX+qx, baseZ+qz) < CONFIG.buildingDensity) {
-                    chunkGroup.add(createBuilding(baseX + qx * qSize * 1.5, baseZ + qz * qSize * 1.5));
+                const relX = qx * qSize * 1.5;
+                const relZ = qz * qSize * 1.5;
+                // ビルの存在確率と形状は絶対座標に基づいて決定（チャンクの回転に影響されないように）
+                const absX = baseX + relX;
+                const absZ = baseZ + relZ;
+
+                if(pseudoRandom(absX, absZ) < CONFIG.buildingDensity) {
+                    const dist = Math.sqrt(absX*absX + absZ*absZ);
+                    const buildingTypeRand = pseudoRandom(absX + 2, absZ - 2);
+
+                    let building;
+                    if (dist < 500) { // Downtown
+                        if (buildingTypeRand < 0.8) {
+                            building = createOfficeBuilding(absX, absZ, relX, relZ);
+                        } else {
+                            building = createApartment(absX, absZ, relX, relZ);
+                        }
+                    } else if (dist < 1500) { // Midtown
+                        if (buildingTypeRand < 0.4) {
+                             building = createOfficeBuilding(absX, absZ, relX, relZ);
+                        } else if (buildingTypeRand < 0.9) {
+                            building = createApartment(absX, absZ, relX, relZ);
+                        } else {
+                            building = createBuilding(absX, absZ, relX, relZ);
+                        }
+                    } else { // Suburbs
+                        if (buildingTypeRand < 0.7) {
+                            building = createApartment(absX, absZ, relX, relZ);
+                        } else {
+                            building = createBuilding(absX, absZ, relX, relZ);
+                        }
+                    }
+                    chunkGroup.add(building);
                 }
             });
 
