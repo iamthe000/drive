@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Realistic Driving Simulator</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ffffff;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 5px;
+            pointer-events: none;
+            user-select: none;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #instructions {
+            font-size: 14px;
+            margin-top: 8px;
+            color: #cccccc;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <strong>REALISTIC DRIVING SIM : ACTIVE</strong><br>
+        <div id="speed">Speed: 0 km/h</div>
+        <div id="coords">X: 0 | Z: 0</div>
+        <div id="instructions">
+            [↑] 加速 / [↓] 減速・バック<br>
+            [←] [→] ハンドル操作
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- 設定 ---
+        const CONFIG = {
+            blockSize: 100,
+            roadWidth: 22,
+            buildingDensity: 0.6,
+            viewDistance: 5, // 描画距離
+            fogColor: 0x8899aa, // 少し曇ったリアルな空色
+            fogDensity: 0.0035,
+            camHeight: 1.35,
+        };
+
+        // --- グローバル変数 ---
+        let scene, camera, renderer;
+        let carGroup, steeringWheel;
+        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+        
+        const carState = {
+            speed: 0, maxSpeed: 2.2, acceleration: 0.015, friction: 0.008,
+            rotation: 0, steeringAngle: 0, x: 0, z: 0,
+            vibration: 0
+        };
+
+        const cityChunks = new Map();
+        const geometryPool = {
+            road: new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth),
+        };
+        let materialPool = {}; // initで初期化
+
+        // --- ユーティリティ関数 (テクスチャ生成) ---
+        // ノイズテクスチャ生成（アスファルトやダッシュボードの凹凸用）
+        function createBumpTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.createImageData(256, 256);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                const val = 100 + Math.random() * 155; // グレーのノイズ
+                imgData.data[i] = val; imgData.data[i+1] = val; imgData.data[i+2] = val; imgData.data[i+3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(8, 8); // 細かくリピート
+            return tex;
+        }
+
+        // ビル窓パターン生成
+        function createBuildingTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            // 壁ベース色
+            ctx.fillStyle = '#666677'; ctx.fillRect(0, 0, 64, 128);
+            // 窓
+            ctx.fillStyle = '#2a3344'; // 窓ガラス色
+            ctx.strokeStyle = '#111111'; ctx.lineWidth = 2; // 窓枠
+            for(let y=10; y<128; y+=24) {
+                for(let x=8; x<64; x+=20) {
+                     ctx.fillRect(x, y, 12, 16);
+                     ctx.strokeRect(x,y,12,16);
+                }
+            }
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+            // 建物の高さに応じてリピート調整が必要だが簡易的に設定
+            tex.repeat.set(1, 4); 
+            return tex;
+        }
+        
+        init();
+        animate();
+
+        function init() {
+            // シーン・フォグ
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(CONFIG.fogColor);
+            // 距離に応じて指数関数的に濃くなるリアルな霧
+            scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity);
+
+            // カメラ
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+            
+            // レンダラー (物理ベースレンダリングを有効化)
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 柔らかい影
+            renderer.toneMapping = THREE.ACESFilmicToneMapping; // 映画のようなトーンマッピング
+            renderer.toneMappingExposure = 1.0;
+            document.body.appendChild(renderer.domElement);
+
+            // マテリアルの準備 (リアルな質感設定)
+            const bumpTex = createBumpTexture();
+            const buildingTex = createBuildingTexture();
+
+            materialPool = {
+                building: new THREE.MeshStandardMaterial({
+                    map: buildingTex, roughness: 0.9, metalness: 0.1
+                }),
+                buildingReflective: new THREE.MeshStandardMaterial({
+                    color: 0x8899aa, roughness: 0.1, metalness: 0.8, // ガラス質のビル
+                    envMapIntensity: 1.5
+                }),
+                road: new THREE.MeshStandardMaterial({
+                    color: 0x333344,
+                    bumpMap: bumpTex, bumpScale: 0.8, // ザラザラ感
+                    roughness: 0.95, metalness: 0.05
+                }),
+                line: new THREE.MeshBasicMaterial({ color: 0xeeeeee }),
+                grass: new THREE.MeshStandardMaterial({ 
+                    color: 0x335533, roughness: 1.0, bumpMap: bumpTex, bumpScale: 0.2
+                })
+            };
+
+            // ライティング
+            setupLights();
+
+            // 車（コックピット）
+            createCockpit(bumpTex);
+
+            // 初期都市生成
+            updateCityChunks();
+
+            // イベント
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.code)) keys[e.code] = true; });
+            document.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.code)) keys[e.code] = false; });
+        }
+
+        function setupLights() {
+            // 環境光 (影の部分を青っぽくして空気感を出す)
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444455, 0.6);
+            scene.add(hemiLight);
+
+            // 太陽光
+            const dirLight = new THREE.DirectionalLight(0xfff0dd, 1.5);
+            dirLight.position.set(-150, 250, -100);
+            dirLight.castShadow = true;
+            // 影の品質設定
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.top = 300;
+            dirLight.shadow.camera.bottom = -300;
+            dirLight.shadow.camera.left = -300;
+            dirLight.shadow.camera.right = 300;
+            dirLight.shadow.camera.near = 0.5;
+            dirLight.shadow.camera.far = 800;
+            dirLight.shadow.bias = -0.0001;
+            dirLight.shadow.radius = 2; // 影のエッジをぼかす
+            scene.add(dirLight);
+        }
+
+        function createCockpit(bumpTex) {
+            carGroup = new THREE.Group();
+            scene.add(carGroup);
+            carGroup.add(camera);
+            camera.position.set(0, CONFIG.camHeight, 0);
+
+            // 共通マテリアル：内装のダークグレー（レザー調の凹凸を追加）
+            const interiorMat = new THREE.MeshStandardMaterial({ 
+                color: 0x1a1a1a, 
+                roughness: 0.9, 
+                metalness: 0.1,
+                bumpMap: bumpTex,
+                bumpScale: 0.015 // 細かいシボ感
+            });
+
+            // 1. ダッシュボード
+            const dashboard = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.6, 1.2), interiorMat);
+            dashboard.position.set(0, CONFIG.camHeight - 0.55, -0.7);
+            dashboard.castShadow = true; // 車内にも影を落とす
+            carGroup.add(dashboard);
+
+            // 2. フロントガラス (PhysicalMaterialでリアルなガラス表現)
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xffffff, metalness: 0, roughness: 0.05,
+                transmission: 0.98, // 高い透過率
+                thickness: 1.5, // 厚み感
+                ior: 1.5, // 屈折率
+                envMapIntensity: 1.2, transparent: true, opacity: 0.3,
+                side: THREE.DoubleSide
+            });
+            const windshield = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.3), glassMat);
+            windshield.position.set(0, CONFIG.camHeight + 0.35, -0.6);
+            windshield.rotation.x = -0.25;
+            carGroup.add(windshield);
+
+            // 3. Aピラー (窓枠)
+            const pillarGeo = new THREE.CylinderGeometry(0.05, 0.07, 1.6, 16);
+            const leftPillar = new THREE.Mesh(pillarGeo, interiorMat);
+            leftPillar.position.set(-1.2, CONFIG.camHeight + 0.35, -0.6);
+            leftPillar.rotation.set(-0.25, 0, -0.15);
+            carGroup.add(leftPillar);
+            const rightPillar = leftPillar.clone();
+            rightPillar.position.x *= -1;
+            rightPillar.rotation.z *= -1;
+            carGroup.add(rightPillar);
+
+            // 4. 天井
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.1, 1.8), interiorMat);
+            roof.position.set(0, CONFIG.camHeight + 1.0, -0.2);
+            carGroup.add(roof);
+
+            // 5. ハンドル
+            const wheelGroup = new THREE.Group();
+            const rim = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.03, 16, 32), interiorMat);
+            wheelGroup.add(rim);
+            const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.02), interiorMat);
+            wheelGroup.add(spoke);
+            wheelGroup.position.set(0.35, CONFIG.camHeight - 0.3, -0.6);
+            wheelGroup.rotation.x = -0.4;
+            carGroup.add(wheelGroup);
+            steeringWheel = wheelGroup;
+
+            // 6. ルームミラー (鏡面反射)
+            const mirrorCaseMat = interiorMat;
+            const mirrorFaceMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.05, metalness: 0.95 });
+            const mirrorGeo = new THREE.BoxGeometry(0.45, 0.18, 0.05);
+            const mirror = new THREE.Mesh(mirrorGeo, [mirrorCaseMat, mirrorCaseMat, mirrorCaseMat, mirrorCaseMat, mirrorFaceMat, mirrorCaseMat]);
+            mirror.position.set(0, CONFIG.camHeight + 0.8, -0.4);
+            mirror.rotation.x = 0.15;
+            carGroup.add(mirror);
+        }
+
+        // --- 都市生成ロジック ---
+        function pseudoRandom(x, z) {
+            return ((Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1 + 1) % 1;
+        }
+
+        function createBuilding(x, z) {
+            const height = 20 + pseudoRandom(x, z) * 60;
+            const width = 15 + pseudoRandom(x+1, z) * 15;
+            const depth = 15 + pseudoRandom(x, z+1) * 15;
+            
+            const geo = new THREE.BoxGeometry(width, height, depth);
+            geo.translate(0, height / 2, 0);
+            
+            // ランダムで光沢のあるビルと窓テクスチャのビルを切り替え
+            const mat = pseudoRandom(x+5, z+5) > 0.8 ? materialPool.buildingReflective : materialPool.building;
+            
+            // テクスチャのリピート調整（高さに合わせて）
+            if(mat.map) {
+                 mat.map.repeat.set(width/20, height/30); 
+                 mat.needsUpdate = true;
+            }
+
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, 0, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            return mesh;
+        }
+
+        function createChunk(cx, cz) {
+            const chunkGroup = new THREE.Group();
+            const baseX = cx * CONFIG.blockSize;
+            const baseZ = cz * CONFIG.blockSize;
+
+            // 地面
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.blockSize), materialPool.grass);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.set(baseX, -0.05, baseZ);
+            ground.receiveShadow = true;
+            chunkGroup.add(ground);
+
+            // 道路 (十字)
+            const roadX = new THREE.Mesh(geometryPool.road, materialPool.road);
+            roadX.rotation.x = -Math.PI / 2;
+            roadX.position.set(baseX, 0.01, baseZ);
+            roadX.receiveShadow = true;
+            chunkGroup.add(roadX);
+
+            const roadZ = roadX.clone();
+            roadZ.rotation.z = Math.PI / 2;
+            roadZ.position.y = 0.015; // 重なりチラツキ防止
+            chunkGroup.add(roadZ);
+
+            // 白線 (簡易)
+            const lineGeo = new THREE.PlaneGeometry(1, 8);
+            for(let i=-2; i<=2; i++) {
+                 if(i===0) continue;
+                 const line = new THREE.Mesh(lineGeo, materialPool.line);
+                 line.rotation.x = -Math.PI/2;
+                 line.position.set(baseX + i*CONFIG.roadWidth/4, 0.02, baseZ + CONFIG.blockSize/4);
+                 chunkGroup.add(line);
+            }
+
+            // ビル配置
+            const qSize = CONFIG.blockSize / 4;
+            [[ -1, -1 ], [ 1, -1 ], [ -1, 1 ], [ 1, 1 ]].forEach(([qx, qz]) => {
+                if(pseudoRandom(baseX+qx, baseZ+qz) < CONFIG.buildingDensity) {
+                    chunkGroup.add(createBuilding(baseX + qx * qSize * 1.5, baseZ + qz * qSize * 1.5));
+                }
+            });
+
+            scene.add(chunkGroup);
+            return chunkGroup;
+        }
+
+        function updateCityChunks() {
+            const cx = Math.round(carState.x / CONFIG.blockSize);
+            const cz = Math.round(carState.z / CONFIG.blockSize);
+            const activeKeys = new Set();
+
+            for (let x = cx - CONFIG.viewDistance; x <= cx + CONFIG.viewDistance; x++) {
+                for (let z = cz - CONFIG.viewDistance; z <= cz + CONFIG.viewDistance; z++) {
+                    const key = `${x},${z}`;
+                    activeKeys.add(key);
+                    if (!cityChunks.has(key)) cityChunks.set(key, createChunk(x, z));
+                }
+            }
+            for (const [key, mesh] of cityChunks) {
+                if (!activeKeys.has(key)) {
+                    scene.remove(mesh);
+                    cityChunks.delete(key);
+                }
+            }
+        }
+
+        function updateCar() {
+            // 物理挙動
+            if (keys.ArrowUp) carState.speed += carState.acceleration;
+            else if (keys.ArrowDown) carState.speed -= carState.acceleration;
+            else carState.speed -= Math.sign(carState.speed) * carState.friction;
+            
+            carState.speed = Math.max(-carState.maxSpeed/2, Math.min(carState.maxSpeed, carState.speed));
+            if(Math.abs(carState.speed) < 0.001) carState.speed = 0;
+
+            const turnFactor = Math.min(Math.abs(carState.speed) / 0.5, 1.0);
+            if (keys.ArrowLeft) carState.steeringAngle += 0.06 * turnFactor;
+            else if (keys.ArrowRight) carState.steeringAngle -= 0.06 * turnFactor;
+            else carState.steeringAngle -= Math.sign(carState.steeringAngle) * 0.08 * turnFactor;
+            carState.steeringAngle = Math.max(-1.0, Math.min(1.0, carState.steeringAngle));
+
+            carState.rotation += carState.steeringAngle * carState.speed * 0.015;
+            carState.x -= Math.sin(carState.rotation) * carState.speed;
+            carState.z -= Math.cos(carState.rotation) * carState.speed;
+
+            carGroup.position.set(carState.x, 0, carState.z);
+            carGroup.rotation.y = carState.rotation;
+
+            // 振動エフェクト（速度に応じて）
+            carState.vibration = (Math.random() - 0.5) * carState.speed * 0.003;
+            if(steeringWheel) {
+                steeringWheel.rotation.z = carState.steeringAngle * 2.2;
+                steeringWheel.position.y = (CONFIG.camHeight - 0.3) + carState.vibration;
+            }
+            // カメラもわずかに振動させて臨場感を出す
+            camera.position.y = CONFIG.camHeight + carState.vibration * 0.5;
+
+            // HUD更新
+            document.getElementById('speed').innerText = `Speed: ${Math.abs(Math.round(carState.speed * 50))} km/h`;
+            document.getElementById('coords').innerText = `X: ${Math.round(carState.x)} | Z: ${Math.round(carState.z)}`;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateCar();
+            updateCityChunks();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
