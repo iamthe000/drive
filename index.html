@@ -2,36 +2,138 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Realistic Driving Simulator</title>
+    <title>vroom: Countryside Drift</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
-        #info {
+        body { margin: 0; overflow: hidden; background: #111; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* UI Overlay Container */
+        #ui-layer {
             position: absolute;
-            top: 20px;
-            left: 20px;
-            color: #ffffff;
-            background: rgba(0, 0, 0, 0.6);
-            padding: 15px;
-            border-radius: 5px;
+            top: 0; left: 0; width: 100%; height: 100%;
             pointer-events: none;
-            user-select: none;
-            text-shadow: 1px 1px 2px #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
         }
-        #instructions {
-            font-size: 14px;
-            margin-top: 8px;
-            color: #cccccc;
+
+        /* Top Bar */
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            padding: 20px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+        }
+
+        #score-box {
+            color: #ffcc00;
+            font-size: 24px;
+            font-weight: 900;
+            text-shadow: 0 0 10px #ffcc00;
+            font-style: italic;
+        }
+
+        #help-box {
+            color: rgba(255,255,255,0.8);
+            text-align: right;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        /* Bottom Dashboard */
+        .dashboard {
+            display: flex;
+            align-items: flex-end;
+            padding: 30px;
+            gap: 40px;
+            background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+        }
+
+        /* Tachometer Style */
+        .gauge-container {
+            position: relative;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 4px solid #333;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gauge-value {
+            color: #fff;
+            font-size: 32px;
+            font-weight: bold;
+            font-style: italic;
+        }
+        .gauge-label {
+            position: absolute;
+            bottom: 20px;
+            font-size: 10px;
+            color: #888;
+        }
+        .gear-display {
+            font-size: 40px;
+            color: #0ff;
+            font-weight: 900;
+            text-shadow: 0 0 10px #0ff;
+        }
+
+        /* Drift Indicator */
+        #drift-msg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 40px;
+            color: #ff3366;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-style: italic;
+            opacity: 0;
+            transition: opacity 0.2s;
+            text-shadow: 4px 4px 0 #000;
+        }
+
+        .key {
+            display: inline-block;
+            background: #333;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 10px;
+            margin: 0 2px;
         }
     </style>
 </head>
 <body>
-    <div id="info">
-        <strong>REALISTIC DRIVING SIM : ACTIVE</strong><br>
-        <div id="speed">Speed: 0 km/h</div>
-        <div id="coords">X: 0 | Z: 0</div>
-        <div id="instructions">
-            [↑] 加速 / [↓] 減速・バック<br>
-            [←] [→] ハンドル操作
+
+    <div id="ui-layer">
+        <div class="top-bar">
+            <div id="score-box">SCORE: <span id="score-val">0</span></div>
+            <div id="help-box">
+                <span class="key">W</span> アクセル <span class="key">S</span> ブレーキ/バック<br>
+                <span class="key">A</span> <span class="key">D</span> ステアリング<br>
+                <span class="key">SPACE</span> ハンドブレーキ(ドリフト)<br>
+                <span class="key">T</span> 時間変更 (昼/夕/夜)<br>
+                <span class="key">R</span> リセット
+            </div>
+        </div>
+
+        <div id="drift-msg">DRIFT!</div>
+
+        <div class="dashboard">
+            <div style="text-align: center;">
+                <div class="gear-display" id="disp-gear">N</div>
+                <div style="color:#aaa; font-size:10px;">GEAR</div>
+            </div>
+
+            <div class="gauge-container">
+                <div class="gauge-value" id="disp-speed">0</div>
+                <div class="gauge-label">KM/H</div>
+                <div id="rpm-bar" style="position:absolute; bottom:0; left:0; height:4px; background:#f00; width:0%; transition: width 0.1s;"></div>
+            </div>
         </div>
     </div>
 
@@ -48,581 +150,373 @@
         import * as THREE from 'three';
 
         // --- 設定 ---
-        const CONFIG = {
-            blockSize: 100,
-            roadWidth: 22,
-            buildingDensity: 0.6,
-            viewDistance: 5, // 描画距離
-            fogColor: 0x8899aa, // 少し曇ったリアルな空色
-            fogDensity: 0.0035,
-            camHeight: 1.35,
-        };
-
-        // --- グローバル変数 ---
-        let scene, camera, renderer;
-        let carGroup, steeringWheel;
-        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+        const TILE_SIZE = 50; 
+        const WORLD_OFFSET_X = -400;
+        const WORLD_OFFSET_Z = -400;
         
-        const carState = {
-            speed: 0, maxSpeed: 2.2, acceleration: 0.015, friction: 0.008,
-            rotation: 0, steeringAngle: 0, x: 0, z: 0,
-            vibration: 0
-        };
+        // 0:道路, 1:民家, 2:店舗/ビル, 3:田畑/空き地, 4:林, 9:スタート
+        const mapData = [
+            [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
+            [4,1,3,1,0,3,3,2,0,1,1,3,3,4,4,4],
+            [4,1,1,3,0,1,1,1,0,3,1,2,1,4,4,4],
+            [4,0,0,0,0,0,0,0,0,0,0,0,0,4,4,4], // メインストリート
+            [4,3,2,0,3,3,1,0,3,2,1,1,0,4,4,4],
+            [4,1,1,0,1,1,3,0,1,1,3,3,0,4,4,4],
+            [4,0,0,0,0,0,0,0,0,0,0,0,0,4,4,4],
+            [4,1,3,0,3,4,4,0,3,1,9,1,0,4,4,4],
+            [4,2,2,0,4,4,4,0,1,1,0,0,0,4,4,4],
+            [4,3,3,0,3,3,1,0,2,2,0,3,3,4,4,4],
+            [4,0,0,0,0,0,0,0,0,0,0,1,1,4,4,4],
+            [4,1,1,3,1,0,3,3,1,0,3,3,1,4,4,4],
+            [4,3,3,3,2,0,1,1,2,0,1,1,3,4,4,4],
+            [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
+        ];
 
-        const cityChunks = new Map();
-        const geometryPool = {
-            road: new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth),
-        };
-        let materialPool = {}; // initで初期化
-
-        // --- ユーティリティ関数 (テクスチャ生成) ---
-        // ノイズテクスチャ生成（アスファルトやダッシュボードの凹凸用）
-        function createBumpTexture() {
+        // --- 簡易テクスチャ生成 ---
+        function createTexture(type) {
             const canvas = document.createElement('canvas');
             canvas.width = 256; canvas.height = 256;
             const ctx = canvas.getContext('2d');
-            const imgData = ctx.createImageData(256, 256);
-            for (let i = 0; i < imgData.data.length; i += 4) {
-                const val = 100 + Math.random() * 155; // グレーのノイズ
-                imgData.data[i] = val; imgData.data[i+1] = val; imgData.data[i+2] = val; imgData.data[i+3] = 255;
-            }
-            ctx.putImageData(imgData, 0, 0);
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-            tex.repeat.set(8, 8); // 細かくリピート
-            return tex;
-        }
 
-        // ビル窓パターン生成
-        function createBuildingTexture() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 64; canvas.height = 128;
-            const ctx = canvas.getContext('2d');
-            // 壁ベース色
-            ctx.fillStyle = '#666677'; ctx.fillRect(0, 0, 64, 128);
-            // 窓
-            ctx.fillStyle = '#2a3344'; // 窓ガラス色
-            ctx.strokeStyle = '#111111'; ctx.lineWidth = 2; // 窓枠
-            for(let y=10; y<128; y+=24) {
-                for(let x=8; x<64; x+=20) {
-                     ctx.fillRect(x, y, 12, 16);
-                     ctx.strokeRect(x,y,12,16);
-                }
+            if (type === 'road') {
+                ctx.fillStyle = '#333'; ctx.fillRect(0,0,256,256);
+                addNoise(ctx, 256, 256, 0.05);
+                ctx.fillStyle = '#ddd'; ctx.fillRect(126, 0, 4, 256); // センターライン
+                ctx.fillStyle = '#fff'; ctx.fillRect(10, 0, 4, 256); ctx.fillRect(242, 0, 4, 256); // 路側帯
+            } else if (type === 'grass') {
+                ctx.fillStyle = '#2d5a27'; ctx.fillRect(0,0,256,256);
+                addNoise(ctx, 256, 256, 0.2);
+            } else if (type === 'wall') {
+                ctx.fillStyle = '#e0d5c1'; ctx.fillRect(0,0,256,256);
+                ctx.fillStyle = '#4a5c66';
+                for(let y=20; y<256; y+=60) for(let x=20; x<256; x+=50) ctx.fillRect(x, y, 30, 40);
             }
             const tex = new THREE.CanvasTexture(canvas);
             tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-            // 建物の高さに応じてリピート調整が必要だが簡易的に設定
-            tex.repeat.set(1, 4); 
             return tex;
         }
-        
-        init();
-        animate();
 
-        function init() {
-            // シーン・フォグ
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(CONFIG.fogColor);
-            // 距離に応じて指数関数的に濃くなるリアルな霧
-            scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity);
-
-            // カメラ
-            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
-            
-            // レンダラー (物理ベースレンダリングを有効化)
-            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
-            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 柔らかい影
-            renderer.toneMapping = THREE.ACESFilmicToneMapping; // 映画のようなトーンマッピング
-            renderer.toneMappingExposure = 1.0;
-            document.body.appendChild(renderer.domElement);
-
-            // マテリアルの準備 (リアルな質感設定)
-            const bumpTex = createBumpTexture();
-            const buildingTex = createBuildingTexture();
-
-            materialPool = {
-                building: new THREE.MeshStandardMaterial({
-                    map: buildingTex, roughness: 0.9, metalness: 0.1
-                }),
-                buildingReflective: new THREE.MeshStandardMaterial({
-                    color: 0x8899aa, roughness: 0.1, metalness: 0.8, // ガラス質のビル
-                    envMapIntensity: 1.5
-                }),
-                road: new THREE.MeshStandardMaterial({
-                    color: 0x333344,
-                    bumpMap: bumpTex, bumpScale: 0.8, // ザラザラ感
-                    roughness: 0.95, metalness: 0.05
-                }),
-                line: new THREE.MeshBasicMaterial({ color: 0xeeeeee }),
-                grass: new THREE.MeshStandardMaterial({ 
-                    color: 0x335533, roughness: 1.0, bumpMap: bumpTex, bumpScale: 0.2
-                })
-            };
-
-            // ライティング
-            setupLights();
-
-            // 車（コックピット）
-            createCockpit(bumpTex);
-
-            // 初期都市生成
-            updateCityChunks();
-
-            // イベント
-            window.addEventListener('resize', onWindowResize);
-            document.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.code)) keys[e.code] = true; });
-            document.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.code)) keys[e.code] = false; });
-        }
-
-        function setupLights() {
-            // 環境光 (影の部分を青っぽくして空気感を出す)
-            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444455, 0.6);
-            scene.add(hemiLight);
-
-            // 太陽光
-            const dirLight = new THREE.DirectionalLight(0xfff0dd, 1.5);
-            dirLight.position.set(-150, 250, -100);
-            dirLight.castShadow = true;
-            // 影の品質設定
-            dirLight.shadow.mapSize.width = 2048;
-            dirLight.shadow.mapSize.height = 2048;
-            dirLight.shadow.camera.top = 300;
-            dirLight.shadow.camera.bottom = -300;
-            dirLight.shadow.camera.left = -300;
-            dirLight.shadow.camera.right = 300;
-            dirLight.shadow.camera.near = 0.5;
-            dirLight.shadow.camera.far = 800;
-            dirLight.shadow.bias = -0.0001;
-            dirLight.shadow.radius = 2; // 影のエッジをぼかす
-            scene.add(dirLight);
-        }
-
-        function createCockpit(bumpTex) {
-            carGroup = new THREE.Group();
-            scene.add(carGroup);
-            carGroup.add(camera);
-            camera.position.set(0, CONFIG.camHeight, 0);
-
-            // 共通マテリアル：内装のダークグレー（レザー調の凹凸を追加）
-            const interiorMat = new THREE.MeshStandardMaterial({ 
-                color: 0x1a1a1a, 
-                roughness: 0.9, 
-                metalness: 0.1,
-                bumpMap: bumpTex,
-                bumpScale: 0.015 // 細かいシボ感
-            });
-
-            // 1. ダッシュボード
-            const dashboard = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.6, 1.2), interiorMat);
-            dashboard.position.set(0, CONFIG.camHeight - 0.55, -0.7);
-            dashboard.castShadow = true; // 車内にも影を落とす
-            carGroup.add(dashboard);
-
-            // 3. Aピラー (窓枠)
-            const pillarGeo = new THREE.CylinderGeometry(0.05, 0.07, 1.6, 16);
-            const leftPillar = new THREE.Mesh(pillarGeo, interiorMat);
-            leftPillar.position.set(-1.2, CONFIG.camHeight + 0.35, -0.6);
-            leftPillar.rotation.set(-0.25, 0, -0.15);
-            carGroup.add(leftPillar);
-            const rightPillar = leftPillar.clone();
-            rightPillar.position.x *= -1;
-            rightPillar.rotation.z *= -1;
-            carGroup.add(rightPillar);
-
-            // 4. 天井
-            const roof = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.1, 1.8), interiorMat);
-            roof.position.set(0, CONFIG.camHeight + 1.0, -0.2);
-            carGroup.add(roof);
-
-            // 5. ハンドル
-            const wheelGroup = new THREE.Group();
-            const rim = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.03, 16, 32), interiorMat);
-            wheelGroup.add(rim);
-            const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.02), interiorMat);
-            wheelGroup.add(spoke);
-            wheelGroup.position.set(0.35, CONFIG.camHeight - 0.3, -0.6);
-            wheelGroup.rotation.x = -0.4;
-            carGroup.add(wheelGroup);
-            steeringWheel = wheelGroup;
-
-            // 6. ルームミラー (鏡面反射)
-            const mirrorCaseMat = interiorMat;
-            const mirrorFaceMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.05, metalness: 0.95 });
-            const mirrorGeo = new THREE.BoxGeometry(0.45, 0.18, 0.05);
-            const mirror = new THREE.Mesh(mirrorGeo, [mirrorCaseMat, mirrorCaseMat, mirrorCaseMat, mirrorCaseMat, mirrorFaceMat, mirrorCaseMat]);
-            mirror.position.set(0, CONFIG.camHeight + 0.8, -0.4);
-            mirror.rotation.x = 0.15;
-            carGroup.add(mirror);
-        }
-
-        // --- 都市生成ロジック ---
-        function pseudoRandom(x, z, salt = 0) {
-            return ((Math.sin(x * 12.9898 + z * 78.233 + salt * 5.4321) * 43758.5453) % 1 + 1) % 1;
-        }
-
-function hashConnect(x1, z1, x2, z2) {
-    const minX = Math.min(x1, x2);
-    const maxX = Math.max(x1, x2);
-    const minZ = Math.min(z1, z2);
-    const maxZ = Math.max(z1, z2);
-    // Use different salts for horizontal and vertical to add variety
-    const salt = (x1 === x2) ? 1.1 : 2.2;
-    return pseudoRandom(minX, minZ, maxX + maxZ + salt) > 0.45;
-}
-
-        function createOfficeBuilding(absX, absZ, relX, relZ) {
-            const height = 60 + pseudoRandom(absX, absZ) * 120;
-            const width = 25 + pseudoRandom(absX + 1, absZ) * 20;
-            const depth = 25 + pseudoRandom(absX, absZ + 1) * 20;
-
-            const geo = new THREE.BoxGeometry(width, height, depth);
-            geo.translate(0, height / 2, 0);
-
-            const mat = pseudoRandom(absX + 5, absZ + 5) > 0.5 
-                ? materialPool.buildingReflective 
-                : new THREE.MeshStandardMaterial({ 
-                      color: 0x99aaff, 
-                      roughness: 0.2, 
-                      metalness: 0.7 
-                  });
-
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(relX, 0, relZ);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            return mesh;
-        }
-
-        function createUtilityPole(relX, relZ) {
-            const group = new THREE.Group();
-            const poleHeight = 12;
-            const poleMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.8 });
-            
-            // 本体
-            const poleGeo = new THREE.CylinderGeometry(0.2, 0.3, poleHeight, 8);
-            const pole = new THREE.Mesh(poleGeo, poleMat);
-            pole.position.y = poleHeight / 2;
-            pole.castShadow = true;
-            group.add(pole);
-
-            // 横木
-            const crossbarGeo = new THREE.BoxGeometry(0.3, 0.3, 3);
-            const crossbar1 = new THREE.Mesh(crossbarGeo, poleMat);
-            crossbar1.position.y = poleHeight - 2.5;
-            group.add(crossbar1);
-            
-            const crossbar2 = crossbar1.clone();
-            crossbar2.position.y = poleHeight - 4;
-            group.add(crossbar2);
-            
-            group.position.set(relX, 0, relZ);
-            return group;
-        }
-
-        function createApartment(absX, absZ, relX, relZ) {
-            const height = 30 + pseudoRandom(absX, absZ) * 40;
-            const width = 20 + pseudoRandom(absX + 1, absZ) * 10;
-            const depth = 20 + pseudoRandom(absX, absZ + 1) * 10;
-            
-            const group = new THREE.Group();
-            group.position.set(relX, 0, relZ);
-
-            // 本体
-            const mainMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.9 });
-            const mainBuilding = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), mainMat);
-            mainBuilding.position.y = height / 2;
-            mainBuilding.castShadow = true;
-            mainBuilding.receiveShadow = true;
-            group.add(mainBuilding);
-
-            // バルコニー
-            const balconyMat = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, roughness: 0.9 });
-            const balconyGeo = new THREE.BoxGeometry(width, 1, 2);
-            for (let y = 3; y < height - 3; y += 4) {
-                const balcony = new THREE.Mesh(balconyGeo, balconyMat);
-                balcony.position.set(0, y, depth / 2 + 1);
-                balcony.castShadow = true;
-                group.add(balcony);
+        function addNoise(ctx, w, h, alpha) {
+            const id = ctx.getImageData(0,0,w,h);
+            const d = id.data;
+            for(let i=0; i<d.length; i+=4) {
+                const r = Math.random() * 255;
+                d[i] = d[i]*(1-alpha) + r*alpha;
+                d[i+1] = d[i+1]*(1-alpha) + r*alpha;
+                d[i+2] = d[i+2]*(1-alpha) + r*alpha;
             }
-            return group;
+            ctx.putImageData(id, 0, 0);
         }
 
-        function createBuilding(absX, absZ, relX, relZ) {
-            const height = 20 + pseudoRandom(absX, absZ) * 60;
-            const width = 15 + pseudoRandom(absX+1, absZ) * 15;
-            const depth = 15 + pseudoRandom(absX, absZ+1) * 15;
-            
-            const geo = new THREE.BoxGeometry(width, height, depth);
-            geo.translate(0, height / 2, 0);
-            
-            // ランダムで光沢のあるビルと窓テクスチャのビルを切り替え
-            const mat = pseudoRandom(absX+5, absZ+5) > 0.8 ? materialPool.buildingReflective : materialPool.building;
-            
-            // テクスチャのリピート調整（高さに合わせて）
-            if(mat.map) {
-                 mat.map.repeat.set(width/20, height/30); 
-                 mat.needsUpdate = true;
-            }
+        // --- Three.js 初期化 ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0xaaccff, 0.003);
+        scene.background = new THREE.Color(0xaaccff);
 
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(relX, 0, relZ);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            return mesh;
-        }
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
 
-        function createCrossroad(group, material) {
-            const roadX = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
-            roadX.rotation.x = -Math.PI / 2;
-            roadX.position.y = 0.01;
-            roadX.receiveShadow = true;
-            group.add(roadX);
+        // --- マテリアル ---
+        const texRoad = createTexture('road');
+        const texGrass = createTexture('grass');
+        const texWall = createTexture('wall');
 
-            const roadZ = roadX.clone();
-            roadZ.rotation.z = Math.PI / 2;
-            roadZ.position.y = 0.015;
-            group.add(roadZ);
-        }
+        const matRoad = new THREE.MeshStandardMaterial({ map: texRoad, roughness: 0.8 });
+        const matGrass = new THREE.MeshStandardMaterial({ map: texGrass, roughness: 1.0 });
+        const matWall = new THREE.MeshStandardMaterial({ map: texWall });
+        const matRoof = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const matTree = new THREE.MeshStandardMaterial({ color: 0x004400 });
+        const matTrunk = new THREE.MeshStandardMaterial({ color: 0x553311 });
+        const matOrb = new THREE.MeshBasicMaterial({ color: 0xffff00 });
 
-        function createDeadEndRoad(group, material) {
-            const road = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize / 2, CONFIG.roadWidth), material);
-            road.rotation.x = -Math.PI / 2;
-            road.position.set(-CONFIG.blockSize / 4, 0.01, 0);
-            road.receiveShadow = true;
-            group.add(road);
-        }
+        // --- ワールド生成 ---
+        const colliders = [];
+        const orbs = [];
 
-        function createStraightRoad(group, material) {
-            const road = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
-            road.rotation.x = -Math.PI / 2;
-            road.position.y = 0.01;
-            road.receiveShadow = true;
-            group.add(road);
-        }
+        // 海
+        const sea = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshBasicMaterial({ color: 0x001133 }));
+        sea.rotation.x = -Math.PI/2; sea.position.y = -40; scene.add(sea);
 
-        function createTJunction(group, material) {
-            const road1 = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.roadWidth), material);
-            road1.rotation.x = -Math.PI / 2;
-            road1.position.y = 0.01;
-            road1.receiveShadow = true;
-            group.add(road1);
+        // 島ベース
+        const mapW = mapData[0].length * TILE_SIZE;
+        const mapH = mapData.length * TILE_SIZE;
+        const island = new THREE.Mesh(new THREE.BoxGeometry(mapW, 40, mapH), new THREE.MeshStandardMaterial({ color: 0x444444 }));
+        island.position.set(mapW/2 + WORLD_OFFSET_X - TILE_SIZE/2, -20, mapH/2 + WORLD_OFFSET_Z - TILE_SIZE/2);
+        scene.add(island);
 
-            const road2 = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.roadWidth, CONFIG.blockSize / 2), material);
-            road2.rotation.x = -Math.PI / 2;
-            road2.position.set(0, 0.015, -CONFIG.blockSize/4);
-            road2.receiveShadow = true;
-            group.add(road2);
-        }
+        function generateWorld() {
+            for(let z=0; z<mapData.length; z++) {
+                for(let x=0; x<mapData[z].length; x++) {
+                    const type = mapData[z][x];
+                    const px = x * TILE_SIZE + WORLD_OFFSET_X;
+                    const pz = z * TILE_SIZE + WORLD_OFFSET_Z;
 
-        function createCurve(group, material) {
-            const curveShape = new THREE.Shape();
-            const roadWidth = CONFIG.roadWidth;
-            curveShape.moveTo(-CONFIG.blockSize / 2, -roadWidth / 2);
-            curveShape.lineTo(-roadWidth / 2, -roadWidth / 2);
-            curveShape.quadraticCurveTo(
-                -roadWidth / 2, CONFIG.blockSize / 2,
-                CONFIG.blockSize / 2, CONFIG.blockSize / 2
-            );
-             curveShape.lineTo(CONFIG.blockSize / 2, roadWidth/2);
-             curveShape.quadraticCurveTo(
-                roadWidth/2, roadWidth/2,
-                roadWidth / 2, -CONFIG.blockSize / 2
-            );
-            curveShape.lineTo(-CONFIG.blockSize/2, -CONFIG.blockSize/2);
-
-
-            const geometry = new THREE.ShapeGeometry(curveShape);
-            const road = new THREE.Mesh(geometry, material);
-            road.rotation.x = -Math.PI / 2;
-            road.position.y = 0.01;
-            road.receiveShadow = true;
-            group.add(road);
-        }
-
-        function createChunk(cx, cz) {
-            const chunkGroup = new THREE.Group();
-            const baseX = cx * CONFIG.blockSize;
-            const baseZ = cz * CONFIG.blockSize;
-            chunkGroup.position.set(baseX, 0, baseZ);
-
-            const ground = new THREE.Mesh(new THREE.PlaneGeometry(CONFIG.blockSize, CONFIG.blockSize), materialPool.grass);
-            ground.rotation.x = -Math.PI / 2;
-            ground.position.y = -0.05;
-            ground.receiveShadow = true;
-            chunkGroup.add(ground);
-
-            // --- 道路生成ロジック (決定的バージョン) ---
-            const connections = {
-                north: hashConnect(cx, cz, cx, cz + 1),
-                east: hashConnect(cx, cz, cx + 1, cz),
-                south: hashConnect(cx, cz, cx, cz - 1),
-                west: hashConnect(cx, cz, cx - 1, cz)
-            };
-            
-            // スタート地点(0,0)とその隣接チャンクは必ず道路を接続し、スタート地点を十字路にする
-            if (cx === 0 && cz === 0) {
-                connections.north = connections.east = connections.south = connections.west = true;
-            } else if (cx === 0 && cz === 1) {
-                connections.south = true;
-            } else if (cx === 1 && cz === 0) {
-                connections.west = true;
-            } else if (cx === 0 && cz === -1) {
-                connections.north = true;
-            } else if (cx === -1 && cz === 0) {
-                connections.east = true;
-            }
-
-            const connectionCount = Object.values(connections).filter(Boolean).length;
-            const roadMaterial = materialPool.road;
-
-            if (connectionCount === 4) {
-                createCrossroad(chunkGroup, roadMaterial);
-            } else if (connectionCount === 3) {
-                createTJunction(chunkGroup, roadMaterial);
-                if (!connections.north) chunkGroup.rotation.y = Math.PI;
-                else if (!connections.east) chunkGroup.rotation.y = -Math.PI / 2;
-                else if (!connections.west) chunkGroup.rotation.y = Math.PI / 2;
-            } else if (connectionCount === 2) {
-                if (connections.north && connections.south) {
-                    createStraightRoad(chunkGroup, roadMaterial);
-                } else if (connections.east && connections.west) {
-                    createStraightRoad(chunkGroup, roadMaterial);
-                    chunkGroup.rotation.y = Math.PI / 2;
-                } else {
-                    createCurve(chunkGroup, roadMaterial);
-                    if (connections.north && connections.west) chunkGroup.rotation.y = Math.PI / 2;
-                    else if (connections.south && connections.west) chunkGroup.rotation.y = Math.PI;
-                    else if (connections.south && connections.east) chunkGroup.rotation.y = -Math.PI / 2;
-                }
-            } else if (connectionCount === 1) {
-                createDeadEndRoad(chunkGroup, roadMaterial);
-                 if (connections.north) chunkGroup.rotation.y = Math.PI / 2;
-                 else if (connections.east) chunkGroup.rotation.y = Math.PI;
-                 else if (connections.south) chunkGroup.rotation.y = -Math.PI / 2;
-            }
-            // connectionCountが0の場合は道路なし（広場）
-            
-            // 電柱の配置
-            for(let i = -CONFIG.blockSize / 2; i <= CONFIG.blockSize / 2; i += 25) {
-                if (Math.abs(i) > CONFIG.roadWidth / 2 - 5) {
-                     chunkGroup.add(createUtilityPole(i, CONFIG.roadWidth / 2 + 2));
-                     chunkGroup.add(createUtilityPole(i, -CONFIG.roadWidth / 2 - 2));
-                }
-            }
-
-            // ビル配置
-            const qSize = CONFIG.blockSize / 4;
-            [[ -1, -1 ], [ 1, -1 ], [ -1, 1 ], [ 1, 1 ]].forEach(([qx, qz]) => {
-                const relX = qx * qSize * 1.5;
-                const relZ = qz * qSize * 1.5;
-                // ビルの存在確率と形状は絶対座標に基づいて決定（チャンクの回転に影響されないように）
-                const absX = baseX + relX;
-                const absZ = baseZ + relZ;
-
-                if(pseudoRandom(absX, absZ) < CONFIG.buildingDensity) {
-                    const dist = Math.sqrt(absX*absX + absZ*absZ);
-                    const buildingTypeRand = pseudoRandom(absX + 2, absZ - 2);
-
-                    let building;
-                    if (dist < 500) { // Downtown
-                        if (buildingTypeRand < 0.8) {
-                            building = createOfficeBuilding(absX, absZ, relX, relZ);
-                        } else {
-                            building = createApartment(absX, absZ, relX, relZ);
-                        }
-                    } else if (dist < 1500) { // Midtown
-                        if (buildingTypeRand < 0.4) {
-                             building = createOfficeBuilding(absX, absZ, relX, relZ);
-                        } else if (buildingTypeRand < 0.9) {
-                            building = createApartment(absX, absZ, relX, relZ);
-                        } else {
-                            building = createBuilding(absX, absZ, relX, relZ);
-                        }
-                    } else { // Suburbs
-                        if (buildingTypeRand < 0.7) {
-                            building = createApartment(absX, absZ, relX, relZ);
-                        } else {
-                            building = createBuilding(absX, absZ, relX, relZ);
-                        }
+                    if(type !== 0 && type !== 9) {
+                        const g = new THREE.Mesh(new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), matGrass);
+                        g.rotation.x = -Math.PI/2; g.position.set(px, 0.1, pz); g.receiveShadow = true; scene.add(g);
                     }
-                    chunkGroup.add(building);
+                    if (type === 0 || type === 9) { // 道路
+                        const r = new THREE.Mesh(new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), matRoad);
+                        r.rotation.x = -Math.PI/2;
+                        if ((x+z)%2 === 0) r.rotation.z = Math.PI/2;
+                        r.position.set(px, 0.15, pz); r.receiveShadow = true; scene.add(r);
+
+                        if(Math.random() < 0.3 && type !== 9) {
+                            const orb = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), matOrb);
+                            orb.position.set(px + (Math.random()-0.5)*20, 1.5, pz + (Math.random()-0.5)*20);
+                            scene.add(orb); orbs.push(orb);
+                            const pLight = new THREE.PointLight(0xffff00, 1, 10);
+                            pLight.position.copy(orb.position); scene.add(pLight);
+                            orb.userData = { light: pLight, active: true };
+                        }
+                    } else if (type === 1 || type === 2) { // ビル
+                        const h = type===1 ? 8 + Math.random()*5 : 15 + Math.random()*10;
+                        const b = new THREE.Mesh(new THREE.BoxGeometry(TILE_SIZE-10, h, TILE_SIZE-10), matWall);
+                        b.position.set(px, h/2, pz); b.castShadow = true; b.receiveShadow = true; scene.add(b);
+                        const roof = new THREE.Mesh(new THREE.ConeGeometry((TILE_SIZE-8)/Math.sqrt(2), 6, 4), matRoof);
+                        roof.position.set(px, h + 3, pz); roof.rotation.y = Math.PI/4; scene.add(roof);
+                        colliders.push({minX: px-(TILE_SIZE-10)/2, maxX: px+(TILE_SIZE-10)/2, minZ: pz-(TILE_SIZE-10)/2, maxZ: pz+(TILE_SIZE-10)/2});
+                    } else if (type === 4) { // 木
+                        for(let i=0; i<3; i++) {
+                            const tx = px + (Math.random()-0.5)*30; const tz = pz + (Math.random()-0.5)*30;
+                            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.8, 3), matTrunk);
+                            trunk.position.set(tx, 1.5, tz); scene.add(trunk);
+                            const leaves = new THREE.Mesh(new THREE.ConeGeometry(3, 8, 8), matTree);
+                            leaves.position.set(tx, 6, tz); leaves.castShadow = true; scene.add(leaves);
+                        }
+                        colliders.push({minX: px-20, maxX: px+20, minZ: pz-20, maxZ: pz+20});
+                    }
+                }
+            }
+        }
+        generateWorld();
+
+        // --- 車 ---
+        const carGroup = new THREE.Group();
+        const carBodyGroup = new THREE.Group();
+        carGroup.add(carBodyGroup);
+
+        const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.7, 4.4), new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.7, roughness: 0.1 }));
+        chassis.position.y = 0.6; chassis.castShadow = true; carBodyGroup.add(chassis);
+        
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.6, 2.5), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.0 }));
+        cabin.position.set(0, 1.2, -0.2); carBodyGroup.add(cabin);
+        
+        const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+        spoiler.position.set(0, 1.1, 2.0); carBodyGroup.add(spoiler);
+
+        const headLightL = new THREE.SpotLight(0xffffee, 0); 
+        headLightL.angle = Math.PI / 6; headLightL.penumbra = 0.2; headLightL.distance = 100; headLightL.decay = 2;
+        headLightL.position.set(0.6, 0.7, -2.0); headLightL.target.position.set(0.6, 0.5, -10);
+        carBodyGroup.add(headLightL); carBodyGroup.add(headLightL.target);
+        
+        const headLightR = headLightL.clone();
+        headLightR.position.set(-0.6, 0.7, -2.0); headLightR.target.position.set(-0.6, 0.5, -10);
+        carBodyGroup.add(headLightR); carBodyGroup.add(headLightR.target);
+        scene.add(carGroup);
+
+        let startX=0, startZ=0;
+        mapData.forEach((row, z) => row.forEach((type, x) => {
+            if(type===9){ startX = x*TILE_SIZE+WORLD_OFFSET_X; startZ = z*TILE_SIZE+WORLD_OFFSET_Z; }
+        }));
+        
+        // --- 物理パラメータ（定義順序OK） ---
+        const carPhysics = {
+            speed: 0,
+            maxSpeed: 2.2,
+            accel: 0.03,
+            brake: 0.08,
+            friction: 0.985,
+            angle: Math.PI,
+            driftAngle: 0,
+            slide: 0,
+            isDrifting: false,
+            isFalling: false,
+            fallVel: 0
+        };
+
+        function resetCar() {
+            carGroup.position.set(startX, 0.5, startZ);
+            carGroup.rotation.set(0, Math.PI, 0);
+            carPhysics.speed = 0;
+            carPhysics.driftAngle = 0;
+            carPhysics.slide = 0;
+            carPhysics.isFalling = false;
+            carPhysics.fallVel = 0;
+        }
+        resetCar();
+
+        // --- 操作 ---
+        const keys = { w:false, a:false, s:false, d:false, space:false };
+        document.addEventListener('keydown', e => {
+            const k = e.key.toLowerCase();
+            if(keys.hasOwnProperty(k) || k===' ') keys[k===' '?'space':k] = true;
+            if(k==='arrowup') keys.w = true; if(k==='arrowdown') keys.s = true;
+            if(k==='arrowleft') keys.a = true; if(k==='arrowright') keys.d = true;
+            if(k==='r') resetCar();
+            if(k==='t') toggleTime();
+        });
+        document.addEventListener('keyup', e => {
+            const k = e.key.toLowerCase();
+            if(keys.hasOwnProperty(k) || k===' ') keys[k===' '?'space':k] = false;
+            if(k==='arrowup') keys.w = false; if(k==='arrowdown') keys.s = false;
+            if(k==='arrowleft') keys.a = false; if(k==='arrowright') keys.d = false;
+        });
+
+        // --- 環境光 ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); scene.add(ambientLight);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        sunLight.position.set(100, 200, 100); sunLight.castShadow = true;
+        sunLight.shadow.mapSize.set(2048, 2048);
+        sunLight.shadow.camera.left = -300; sunLight.shadow.camera.right = 300;
+        sunLight.shadow.camera.top = 300; sunLight.shadow.camera.bottom = -300;
+        scene.add(sunLight);
+
+        let timeState = 0; 
+        function toggleTime() {
+            timeState = (timeState + 1) % 3;
+            if(timeState === 0) { // 昼
+                scene.background.setHex(0xaaccff); scene.fog.color.setHex(0xaaccff);
+                ambientLight.intensity = 0.6; sunLight.intensity = 1.2; sunLight.color.setHex(0xffffff);
+                headLightL.intensity = 0; headLightR.intensity = 0;
+            } else if(timeState === 1) { // 夕方
+                scene.background.setHex(0xffaa66); scene.fog.color.setHex(0xffaa66);
+                ambientLight.intensity = 0.4; sunLight.intensity = 0.8; sunLight.color.setHex(0xffaa00);
+                headLightL.intensity = 10; headLightR.intensity = 10;
+            } else { // 夜
+                scene.background.setHex(0x050510); scene.fog.color.setHex(0x050510);
+                ambientLight.intensity = 0.1; sunLight.intensity = 0.0;
+                headLightL.intensity = 100; headLightR.intensity = 100;
+            }
+        }
+
+        // --- ループ ---
+        let score = 0;
+        function updatePhysics() {
+            if(carPhysics.isFalling) {
+                carPhysics.fallVel += 0.02;
+                carGroup.position.y -= carPhysics.fallVel;
+                carGroup.rotation.x += 0.05; carGroup.rotation.z += 0.02;
+                if(carGroup.position.y < -50) resetCar();
+                return;
+            }
+
+            // 移動計算
+            if(keys.w) carPhysics.speed += carPhysics.accel;
+            if(keys.s) carPhysics.speed -= carPhysics.brake;
+            carPhysics.speed *= carPhysics.friction;
+            if(carPhysics.speed > carPhysics.maxSpeed) carPhysics.speed = carPhysics.maxSpeed;
+            if(carPhysics.speed < -0.8) carPhysics.speed = -0.8;
+
+            let steer = 0;
+            if(Math.abs(carPhysics.speed) > 0.05) {
+                if(keys.a) steer = 0.04; if(keys.d) steer = -0.04;
+                if(carPhysics.speed < 0) steer *= -1;
+            }
+            carPhysics.angle += steer;
+
+            // ドリフト
+            let centrifugal = carPhysics.speed * steer * 5; 
+            if (keys.space && Math.abs(carPhysics.speed) > 0.8) {
+                carPhysics.slide += centrifugal * 1.5;
+            } else {
+                carPhysics.slide *= 0.9;
+            }
+            carPhysics.slide = Math.max(-1.5, Math.min(1.5, carPhysics.slide));
+
+            const moveAngle = carPhysics.angle + carPhysics.slide * 0.5;
+            const velX = Math.sin(moveAngle) * carPhysics.speed;
+            const velZ = Math.cos(moveAngle) * carPhysics.speed;
+            const nextX = carGroup.position.x + velX;
+            const nextZ = carGroup.position.z + velZ;
+
+            // 衝突
+            let collision = false; const carRad = 1.2;
+            for(let c of colliders) {
+                if(nextX+carRad > c.minX && nextX-carRad < c.maxX && nextZ+carRad > c.minZ && nextZ-carRad < c.maxZ) {
+                    collision = true; break;
+                }
+            }
+            if(collision) { carPhysics.speed *= -0.5; carPhysics.slide = 0; }
+            else { carGroup.position.x = nextX; carGroup.position.z = nextZ; }
+            carGroup.rotation.y = carPhysics.angle;
+
+            // 崖判定
+            const minX = WORLD_OFFSET_X - 10; const maxX = WORLD_OFFSET_X + mapW - TILE_SIZE + 10;
+            const minZ = WORLD_OFFSET_Z - 10; const maxZ = WORLD_OFFSET_Z + mapH - TILE_SIZE + 10;
+            if (nextX < minX || nextX > maxX || nextZ < minZ || nextZ > maxZ) carPhysics.isFalling = true;
+
+            // アイテム
+            orbs.forEach(orb => {
+                if(orb.userData.active) {
+                    if(Math.hypot(orb.position.x - carGroup.position.x, orb.position.z - carGroup.position.z) < 3.0) {
+                        score += 100; document.getElementById('score-val').innerText = score;
+                        orb.userData.active = false; orb.visible = false; orb.userData.light.intensity = 0;
+                    } else {
+                        orb.position.y = 1.5 + Math.sin(Date.now()*0.005)*0.3; orb.rotation.y += 0.05;
+                    }
                 }
             });
 
-            scene.add(chunkGroup);
-            return chunkGroup;
+            // ビジュアルロール
+            const roll = -carPhysics.slide * 0.2; 
+            const pitch = (keys.w ? -0.02 : 0) + (keys.s ? 0.03 : 0);
+            carBodyGroup.rotation.z += (roll - carBodyGroup.rotation.z) * 0.1;
+            carBodyGroup.rotation.x += (pitch - carBodyGroup.rotation.x) * 0.1;
+
+            const driftMsg = document.getElementById('drift-msg');
+            if(Math.abs(carPhysics.slide) > 0.5 && Math.abs(carPhysics.speed) > 0.5) {
+                driftMsg.style.opacity = 1;
+                driftMsg.style.transform = `translate(-50%, -50%) rotate(${Math.random()*10-5}deg)`;
+            } else { driftMsg.style.opacity = 0; }
         }
 
-        function updateCityChunks() {
-            const cx = Math.round(carState.x / CONFIG.blockSize);
-            const cz = Math.round(carState.z / CONFIG.blockSize);
-            const activeKeys = new Set();
-
-            for (let x = cx - CONFIG.viewDistance; x <= cx + CONFIG.viewDistance; x++) {
-                for (let z = cz - CONFIG.viewDistance; z <= cz + CONFIG.viewDistance; z++) {
-                    const key = `${x},${z}`;
-                    activeKeys.add(key);
-                    if (!cityChunks.has(key)) cityChunks.set(key, createChunk(x, z));
-                }
-            }
-            for (const [key, mesh] of cityChunks) {
-                if (!activeKeys.has(key)) {
-                    scene.remove(mesh);
-                    cityChunks.delete(key);
-                }
-            }
-        }
-
-        function updateCar() {
-            // 物理挙動
-            if (keys.ArrowUp) carState.speed += carState.acceleration;
-            else if (keys.ArrowDown) carState.speed -= carState.acceleration;
-            else carState.speed -= Math.sign(carState.speed) * carState.friction;
+        function updateCamera() {
+            if(carPhysics.isFalling) return;
+            const dist = 6.0; const height = 2.5;
             
-            carState.speed = Math.max(-carState.maxSpeed/2, Math.min(carState.maxSpeed, carState.speed));
-            if(Math.abs(carState.speed) < 0.001) carState.speed = 0;
+            // 【修正箇所】ここで targetY を定義します
+            const targetY = carGroup.position.y; 
 
-            const turnFactor = Math.min(Math.abs(carState.speed) / 0.5, 1.0);
-            if (keys.ArrowLeft) carState.steeringAngle += 0.06 * turnFactor;
-            else if (keys.ArrowRight) carState.steeringAngle -= 0.06 * turnFactor;
-            else carState.steeringAngle -= Math.sign(carState.steeringAngle) * 0.08 * turnFactor;
-            carState.steeringAngle = Math.max(-1.0, Math.min(1.0, carState.steeringAngle));
-
-            carState.rotation += carState.steeringAngle * carState.speed * 0.015;
-            carState.x -= Math.sin(carState.rotation) * carState.speed;
-            carState.z -= Math.cos(carState.rotation) * carState.speed;
-
-            carGroup.position.set(carState.x, 0, carState.z);
-            carGroup.rotation.y = carState.rotation;
-
-            // 振動エフェクト（速度に応じて）
-            carState.vibration = (Math.random() - 0.5) * carState.speed * 0.003;
-            if(steeringWheel) {
-                steeringWheel.rotation.z = carState.steeringAngle * 2.2;
-                steeringWheel.position.y = (CONFIG.camHeight - 0.3) + carState.vibration;
-            }
-            // カメラもわずかに振動させて臨場感を出す
-            camera.position.y = CONFIG.camHeight + carState.vibration * 0.5;
-
-            // HUD更新
-            document.getElementById('speed').innerText = `Speed: ${Math.abs(Math.round(carState.speed * 50))} km/h`;
-            document.getElementById('coords').innerText = `X: ${Math.round(carState.x)} | Z: ${Math.round(carState.z)}`;
+            const camAngle = carPhysics.angle - carPhysics.slide * 0.3;
+            const targetX = carGroup.position.x - Math.sin(camAngle) * dist;
+            const targetZ = carGroup.position.z - Math.cos(camAngle) * dist;
+            
+            camera.position.x += (targetX - camera.position.x) * 0.1;
+            camera.position.z += (targetZ - camera.position.z) * 0.1;
+            // targetY を使った計算
+            camera.position.y += (targetY + height - camera.position.y) * 0.1;
+            
+            camera.lookAt(carGroup.position.x + Math.sin(carPhysics.angle)*10, carGroup.position.y+1, carGroup.position.z + Math.cos(carPhysics.angle)*10);
+            camera.fov = 60 + Math.abs(carPhysics.speed) * 10;
+            camera.updateProjectionMatrix();
         }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+        function updateUI() {
+            document.getElementById('disp-speed').innerText = Math.abs(Math.round(carPhysics.speed * 180));
+            const ratio = Math.min(Math.abs(carPhysics.speed) / carPhysics.maxSpeed, 1.0);
+            document.getElementById('rpm-bar').style.width = (ratio * 100) + '%';
+            let g = 'N';
+            if(carPhysics.speed > 0.1) g = '1'; if(carPhysics.speed > 0.8) g = '2'; if(carPhysics.speed > 1.6) g = '3';
+            if(carPhysics.speed < -0.1) g = 'R';
+            document.getElementById('disp-gear').innerText = g;
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            updateCar();
-            updateCityChunks();
+            updatePhysics(); updateCamera(); updateUI();
             renderer.render(scene, camera);
         }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>
