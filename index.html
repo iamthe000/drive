@@ -112,7 +112,8 @@
                 <span class="key">A</span> <span class="key">D</span> ステアリング<br>
                 <span class="key">SPACE</span> ハンドブレーキ(ドリフト)<br>
                 <span class="key">T</span> 時間変更 (昼/夕/夜)<br>
-                <span class="key">R</span> リセット
+                <span class="key">R</span> リセット<br>
+                <span class="key">M</span> ギアモード <span class="key">Q</span><span class="key">E</span> シフト
             </div>
         </div>
 
@@ -122,6 +123,7 @@
             <div style="text-align: center;">
                 <div class="gear-display" id="disp-gear">N</div>
                 <div style="color:#aaa; font-size:10px;">GEAR</div>
+                <div id="disp-gear-mode" style="color:#aaa; font-size:10px; margin-top: 5px;">AUTO</div>
             </div>
 
             <div class="gauge-container">
@@ -285,6 +287,7 @@
 
         const carGroup = new THREE.Group();
         const carBodyGroup = new THREE.Group();
+        carBodyGroup.rotation.y = Math.PI;
         carGroup.add(carBodyGroup);
 
         const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.7, 4.4), new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.7, roughness: 0.1 }));
@@ -322,7 +325,9 @@
             slide: 0,
             isDrifting: false,
             isFalling: false,
-            fallVel: 0
+            fallVel: 0,
+            isManualGear: false,
+            currentGear: 0, // 0:N, -1:R, 1-3:Fwd
         };
 
         function resetCar() {
@@ -336,7 +341,9 @@
         }
         resetCar();
 
-        const keys = { w:false, a:false, s:false, d:false, space:false };
+        const GEAR_MAX_SPEED = {'-1': 0.8, '0': 0, '1': 0.8, '2': 1.6, '3': 2.2};
+
+        const keys = { w:false, a:false, s:false, d:false, space:false, q:false, e:false };
         document.addEventListener('keydown', e => {
             const k = e.key.toLowerCase();
             if(keys.hasOwnProperty(k) || k===' ') keys[k===' '?'space':k] = true;
@@ -344,6 +351,11 @@
             if(k==='arrowleft') keys.a = true; if(k==='arrowright') keys.d = true;
             if(k==='r') resetCar();
             if(k==='t') toggleTime();
+            if(k==='m') carPhysics.isManualGear = !carPhysics.isManualGear;
+            if(carPhysics.isManualGear) {
+                if(k==='e' && carPhysics.currentGear < 3) carPhysics.currentGear++;
+                if(k==='q' && carPhysics.currentGear > -1) carPhysics.currentGear--;
+            }
         });
         document.addEventListener('keyup', e => {
             const k = e.key.toLowerCase();
@@ -388,11 +400,26 @@
                 return;
             }
 
-            if(keys.w) carPhysics.speed += carPhysics.accel;
-            if(keys.s) carPhysics.speed -= carPhysics.brake;
+            if (carPhysics.isManualGear) {
+                const maxGearSpeed = GEAR_MAX_SPEED[carPhysics.currentGear];
+                if (carPhysics.currentGear === -1) { // Reverse
+                    if (keys.s) carPhysics.speed -= carPhysics.accel;
+                    if (keys.w) carPhysics.speed += carPhysics.brake;
+                    if (carPhysics.speed > 0) carPhysics.speed = 0;
+                    if (carPhysics.speed < -maxGearSpeed) carPhysics.speed = -maxGearSpeed;
+                } else { // Forward or Neutral
+                    if (keys.w && carPhysics.currentGear > 0) carPhysics.speed += carPhysics.accel;
+                    if (keys.s) carPhysics.speed -= carPhysics.brake;
+                    if (carPhysics.speed < 0) carPhysics.speed = 0;
+                    if (carPhysics.speed > maxGearSpeed) carPhysics.speed = maxGearSpeed;
+                }
+            } else { // Automatic
+                if (keys.w) carPhysics.speed += carPhysics.accel;
+                if (keys.s) carPhysics.speed -= carPhysics.brake;
+                if (carPhysics.speed > carPhysics.maxSpeed) carPhysics.speed = carPhysics.maxSpeed;
+                if (carPhysics.speed < -0.8) carPhysics.speed = -0.8;
+            }
             carPhysics.speed *= carPhysics.friction;
-            if(carPhysics.speed > carPhysics.maxSpeed) carPhysics.speed = carPhysics.maxSpeed;
-            if(carPhysics.speed < -0.8) carPhysics.speed = -0.8;
 
             let steer = 0;
             if(Math.abs(carPhysics.speed) > 0.05) {
@@ -475,9 +502,16 @@
             document.getElementById('disp-speed').innerText = Math.abs(Math.round(carPhysics.speed * 180));
             const ratio = Math.min(Math.abs(carPhysics.speed) / carPhysics.maxSpeed, 1.0);
             document.getElementById('rpm-bar').style.width = (ratio * 100) + '%';
+            
+            document.getElementById('disp-gear-mode').innerText = carPhysics.isManualGear ? 'MANUAL' : 'AUTO';
             let g = 'N';
-            if(carPhysics.speed > 0.1) g = '1'; if(carPhysics.speed > 0.8) g = '2'; if(carPhysics.speed > 1.6) g = '3';
-            if(carPhysics.speed < -0.1) g = 'R';
+            if(carPhysics.isManualGear) {
+                if(carPhysics.currentGear === -1) g = 'R';
+                else if(carPhysics.currentGear > 0) g = String(carPhysics.currentGear);
+            } else {
+                if(carPhysics.speed > 0.1) g = '1'; if(carPhysics.speed > 0.8) g = '2'; if(carPhysics.speed > 1.6) g = '3';
+                if(carPhysics.speed < -0.1) g = 'R';
+            }
             document.getElementById('disp-gear').innerText = g;
         }
 
