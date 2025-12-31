@@ -146,7 +146,8 @@
     <script type="module">
         import * as THREE from 'three';
 
-        const TILE_SIZE = 50; 
+        const TILE_SIZE = 50;
+        const SIDEWALK_INSET = 4;
         const WORLD_OFFSET_X = -400;
         const WORLD_OFFSET_Z = -400;
         
@@ -220,6 +221,7 @@
 
         const matRoad = new THREE.MeshStandardMaterial({ map: texRoad, roughness: 0.8 });
         const matGrass = new THREE.MeshStandardMaterial({ map: texGrass, roughness: 1.0 });
+        const matSidewalk = new THREE.MeshStandardMaterial({ color: 0x888888 });
         const matWall = new THREE.MeshStandardMaterial({ map: texWall });
         const matRoof = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
         const matTree = new THREE.MeshStandardMaterial({ color: 0x004400 });
@@ -248,6 +250,31 @@
                     if(type !== 0 && type !== 9) {
                         const g = new THREE.Mesh(new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), matGrass);
                         g.rotation.x = -Math.PI/2; g.position.set(px, 0.1, pz); g.receiveShadow = true; scene.add(g);
+                        
+                        // Add sidewalks next to roads
+                        const neighbors = [{x:0, z:-1}, {x:0, z:1}, {x:-1, z:0}, {x:1, z:0}];
+                        for (const n of neighbors) {
+                            const nx = x + n.x;
+                            const nz = z + n.z;
+                            if (nx >= 0 && nx < mapData[0].length && nz >= 0 && nz < mapData.length) {
+                                const neighborType = mapData[nz][nx];
+                                if (neighborType === 0 || neighborType === 9) {
+                                    const isVertical = n.x !== 0;
+                                    const sw = isVertical ? SIDEWALK_INSET : TILE_SIZE;
+                                    const sh = 0.2;
+                                    const sd = isVertical ? TILE_SIZE : SIDEWALK_INSET;
+                                    const sidewalk = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, sd), matSidewalk);
+                                    sidewalk.position.set(
+                                        px + n.x * (TILE_SIZE - sw) / 2,
+                                        sh / 2,
+                                        pz + n.z * (TILE_SIZE - sd) / 2
+                                    );
+                                    sidewalk.receiveShadow = true;
+                                    scene.add(sidewalk);
+                                }
+                            }
+                        }
+
                     }
                     if (type === 0 || type === 9) {
                         const r = new THREE.Mesh(new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), matRoad);
@@ -264,12 +291,13 @@
                             orb.userData = { light: pLight, active: true };
                         }
                     } else if (type === 1 || type === 2) {
+                        const buildingSize = TILE_SIZE - SIDEWALK_INSET * 2;
                         const h = type===1 ? 8 + Math.random()*5 : 15 + Math.random()*10;
-                        const b = new THREE.Mesh(new THREE.BoxGeometry(TILE_SIZE-10, h, TILE_SIZE-10), matWall);
+                        const b = new THREE.Mesh(new THREE.BoxGeometry(buildingSize, h, buildingSize), matWall);
                         b.position.set(px, h/2, pz); b.castShadow = true; b.receiveShadow = true; scene.add(b);
-                        const roof = new THREE.Mesh(new THREE.ConeGeometry((TILE_SIZE-8)/Math.sqrt(2), 6, 4), matRoof);
+                        const roof = new THREE.Mesh(new THREE.ConeGeometry(buildingSize / Math.sqrt(2), 6, 4), matRoof);
                         roof.position.set(px, h + 3, pz); roof.rotation.y = Math.PI/4; scene.add(roof);
-                        colliders.push({minX: px-(TILE_SIZE-10)/2, maxX: px+(TILE_SIZE-10)/2, minZ: pz-(TILE_SIZE-10)/2, maxZ: pz+(TILE_SIZE-10)/2});
+                        colliders.push({minX: px - buildingSize / 2, maxX: px + buildingSize / 2, minZ: pz - buildingSize / 2, maxZ: pz + buildingSize / 2});
                     } else if (type === 4) {
                         for(let i=0; i<3; i++) {
                             const tx = px + (Math.random()-0.5)*30; const tz = pz + (Math.random()-0.5)*30;
