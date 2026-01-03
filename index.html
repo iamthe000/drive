@@ -169,17 +169,76 @@
             [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
         ];
 
+        function createRoadTexture(connections) {
+            const canvas = document.createElement('canvas');
+            const size = 256;
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+
+            // road surface
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, 0, size, size);
+            addNoise(ctx, size, size, 0.05);
+
+            const lineWidth = 4;
+            const centerLineDash = [20, 20]; // 破線の描画設定
+            const centerLineOffset = 15;
+            const edgeLineOffset = 10;
+
+            // connections = { top: bool, bottom: bool, left: bool, right: bool }
+            const connCount = Object.values(connections).filter(c => c).length;
+
+            // Draw edge lines
+            ctx.fillStyle = '#fff';
+            if (!connections.top) ctx.fillRect(0, edgeLineOffset, size, lineWidth);
+            if (!connections.bottom) ctx.fillRect(0, size - edgeLineOffset - lineWidth, size, lineWidth);
+            if (!connections.left) ctx.fillRect(edgeLineOffset, 0, lineWidth, size);
+            if (!connections.right) ctx.fillRect(size - edgeLineOffset - lineWidth, 0, lineWidth, size);
+
+            // Draw center lines
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = lineWidth;
+            
+            if (connections.top && connections.bottom && !connections.left && !connections.right) {
+                // Vertical road
+                ctx.setLineDash(centerLineDash);
+                ctx.beginPath();
+                ctx.moveTo(size / 2, 0);
+                ctx.lineTo(size / 2, size);
+                ctx.stroke();
+            } else if (connections.left && connections.right && !connections.top && !connections.bottom) {
+                // Horizontal road
+                ctx.setLineDash(centerLineDash);
+                ctx.beginPath();
+                ctx.moveTo(0, size / 2);
+                ctx.lineTo(size, size / 2);
+                ctx.stroke();
+            } else if (connCount === 2) { // Curves
+                 ctx.setLineDash([]);
+                 ctx.beginPath();
+                 const r = size/2 - centerLineOffset;
+                 if(connections.bottom && connections.right) ctx.arc(size - (edgeLineOffset+lineWidth), size - (edgeLineOffset+lineWidth), r, Math.PI/2, Math.PI, false);
+                 if(connections.bottom && connections.left)  ctx.arc(edgeLineOffset+lineWidth, size - (edgeLineOffset+lineWidth), r, 0, Math.PI/2, false);
+                 if(connections.top && connections.right)    ctx.arc(size - (edgeLineOffset+lineWidth), edgeLineOffset+lineWidth, r, Math.PI, 3*Math.PI/2, false);
+                 if(connections.top && connections.left)     ctx.arc(edgeLineOffset+lineWidth, edgeLineOffset+lineWidth, r, 3*Math.PI/2, 2*Math.PI, false);
+                 ctx.stroke();
+            } else if (connCount > 2) {
+                // T-junctions and Crossroads: No center lines
+            }
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            return tex;
+        }
+
         function createTexture(type) {
             const canvas = document.createElement('canvas');
             canvas.width = 256; canvas.height = 256;
             const ctx = canvas.getContext('2d');
 
-            if (type === 'road') {
-                ctx.fillStyle = '#333'; ctx.fillRect(0,0,256,256);
-                addNoise(ctx, 256, 256, 0.05);
-                ctx.fillStyle = '#ddd'; ctx.fillRect(126, 0, 4, 256);
-                ctx.fillStyle = '#fff'; ctx.fillRect(10, 0, 4, 256); ctx.fillRect(242, 0, 4, 256);
-            } else if (type === 'grass') {
+            if (type === 'grass') {
                 ctx.fillStyle = '#2d5a27'; ctx.fillRect(0,0,256,256);
                 addNoise(ctx, 256, 256, 0.2);
             } else if (type === 'wall') {
@@ -215,11 +274,9 @@
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(renderer.domElement);
 
-        const texRoad = createTexture('road');
         const texGrass = createTexture('grass');
         const texWall = createTexture('wall');
 
-        const matRoad = new THREE.MeshStandardMaterial({ map: texRoad, roughness: 0.8 });
         const matGrass = new THREE.MeshStandardMaterial({ map: texGrass, roughness: 1.0 });
         const matSidewalk = new THREE.MeshStandardMaterial({ color: 0x888888 });
         const matWall = new THREE.MeshStandardMaterial({ map: texWall });
@@ -241,6 +298,8 @@
         scene.add(island);
 
         function generateWorld() {
+            const roadMaterialCache = {};
+
             for(let z=0; z<mapData.length; z++) {
                 for(let x=0; x<mapData[z].length; x++) {
                     const type = mapData[z][x];
@@ -277,9 +336,21 @@
 
                     }
                     if (type === 0 || type === 9) {
-                        const r = new THREE.Mesh(new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), matRoad);
+                        const connections = {
+                            top: z > 0 && (mapData[z-1][x] === 0 || mapData[z-1][x] === 9),
+                            bottom: z < mapData.length - 1 && (mapData[z+1][x] === 0 || mapData[z+1][x] === 9),
+                            left: x > 0 && (mapData[z][x-1] === 0 || mapData[z][x-1] === 9),
+                            right: x < mapData[z].length - 1 && (mapData[z][x+1] === 0 || mapData[z][x+1] === 9)
+                        };
+                        const key = Object.values(connections).map(c => c ? 't' : 'f').join('-');
+                        
+                        if (!roadMaterialCache[key]) {
+                            const roadTex = createRoadTexture(connections);
+                            roadMaterialCache[key] = new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.8 });
+                        }
+                        
+                        const r = new THREE.Mesh(new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), roadMaterialCache[key]);
                         r.rotation.x = -Math.PI/2;
-                        if ((x+z)%2 === 0) r.rotation.z = Math.PI/2;
                         r.position.set(px, 0.15, pz); r.receiveShadow = true; scene.add(r);
 
                         if(Math.random() < 0.3 && type !== 9) {
